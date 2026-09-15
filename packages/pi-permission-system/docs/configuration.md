@@ -483,6 +483,32 @@ MCP permissions match against derived targets from tool input:
 
 > **Note:** Baseline discovery targets auto-allow when any explicit `mcp: allow` rule exists.
 
+#### How server/tool targets are derived from a tool name
+
+When a call carries no explicit `server` argument, the permission system derives server candidates from the tool name against the servers configured in your MCP config, in this order — first hit wins:
+
+1. **Qualified name** — `server:tool` splits directly.
+2. **Prefix convention** (`server_tool`, the common case: the `mcp()` proxy's `tool`
+   values like `chrome_devtools_take_screenshot`, and aggregator-combined names
+   like `github_search_code`) — the **longest** configured server whose name is
+   the leading segment matches. `foo_bar_baz` belongs to `foo_bar`, never also to
+   `foo`; and a prefix hit suppresses any suffix coincidence, so `foo_bar_baz_github`
+   derives `foo_bar` and never `github`.
+3. **Suffix convention** (legacy names like `search_code_github`) — derives the
+   qualified and bare forms.
+
+An explicit `server` argument always short-circutes derivation.
+
+#### Which rule shape to write
+
+| Rule shape            | Matches                        | Use it for                                                                                                                                    |
+| --------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"myServer"` (exact)  | the derived bare-server target | **Server-level policy — the recommended form.** Fires for any call whose tool belongs to that server, whatever naming convention produced it. |
+| `"myServer_*"` (glob) | the tool-name target           | Tool-level policy for prefix-named tools (the common case).                                                                                   |
+| `"*_myServer"` (glob) | re-prefixed suffix candidates  | Only when you know you have suffix-named tools; otherwise avoid.                                                                              |
+
+Within the `mcp` surface the ordered candidate list is matched most-specific first (server-qualified forms, then the bare server, then the tool name, then `mcp_call`), and **last matching rule wins** — put broad catch-alls first and specific overrides after, as elsewhere.
+
 String shorthand grants broad MCP access — useful for per-agent overrides:
 
 ```yaml

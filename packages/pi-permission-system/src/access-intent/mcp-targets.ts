@@ -61,6 +61,30 @@ function addDerivedMcpServerTargets(
     return;
   }
 
+  // The configured list is ordered longest-first, so the first prefix match is
+  // the most specific server. A tool name qualifies against exactly ONE server
+  // by prefix (foo_bar_baz belongs to foo_bar, not also to foo), so derivation
+  // stops at the first hit: a rule for a shorter, coincidentally-matching
+  // server must not fire on a longer name. A prefix hit also wins over any
+  // suffix coincidence — one naming convention per name, disambiguated.
+  for (const serverName of configuredServerNames) {
+    const trimmedServerName = serverName.trim();
+    if (!trimmedServerName) {
+      continue;
+    }
+
+    if (trimmedToolName.startsWith(`${trimmedServerName}_`)) {
+      // Prefix convention (pi-mcp-adapter proxy `tool` values, mcp-combiner combined
+      // names): the server is already the leading segment, so the only useful
+      // derived candidate is the bare server name — exact-server rules
+      // (mcp: {"github": "deny"}) can then fire without an explicit server argument.
+      targets.add(trimmedServerName);
+      return;
+    }
+  }
+
+  // Suffix convention (legacy names like search_code_github): derive the
+  // qualified and bare forms. Pre-existing behavior, unchanged.
   for (const serverName of configuredServerNames) {
     const trimmedServerName = serverName.trim();
     if (!trimmedServerName) {
@@ -68,10 +92,6 @@ function addDerivedMcpServerTargets(
     }
 
     if (!trimmedToolName.endsWith(`_${trimmedServerName}`)) {
-      continue;
-    }
-
-    if (trimmedToolName.startsWith(`${trimmedServerName}_`)) {
       continue;
     }
 
@@ -92,8 +112,13 @@ function pushMcpToolPermissionTargets(
   const resolvedTool = qualified?.tool ?? rawReference;
 
   if (resolvedServer) {
-    targets.add(`${resolvedServer}_${resolvedTool}`);
-    targets.add(`${resolvedServer}:${resolvedTool}`);
+    // A tool name already carrying the server prefix (pi-mcp-adapter proxy values
+    // like github_search_code) needs no re-prefixed candidates — they match nothing
+    // and push the useful candidates down the ordered list.
+    if (!resolvedTool.startsWith(`${resolvedServer}_`)) {
+      targets.add(`${resolvedServer}_${resolvedTool}`);
+      targets.add(`${resolvedServer}:${resolvedTool}`);
+    }
     targets.add(resolvedServer);
   } else {
     addDerivedMcpServerTargets(resolvedTool, configuredServerNames, targets);

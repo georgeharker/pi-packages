@@ -76,6 +76,66 @@ describe("createMcpPermissionTargets", () => {
       expect(targets).toContain("mcp_call");
     });
 
+    it("prefix derivation is longest-match only — a shorter coincidentally-matching server does not fire", () => {
+      const targets = createMcpPermissionTargets({ tool: "foo_bar_baz" }, [
+        "foo_bar",
+        "foo",
+      ]);
+      expect(targets).toContain("foo_bar");
+      expect(targets).not.toContain("foo");
+    });
+
+    it("a prefix match suppresses suffix coincidence — one naming convention per name", () => {
+      const targets = createMcpPermissionTargets(
+        { tool: "foo_bar_baz_github" },
+        ["foo_bar", "github"],
+      );
+      expect(targets).toContain("foo_bar");
+      expect(targets).not.toContain("github");
+    });
+
+    it("derives the bare server for prefix-named tools (pi-mcp-adapter proxy values, mcp-combiner combined names)", () => {
+      const targets = createMcpPermissionTargets(
+        { tool: "github_search_code" },
+        ["github", "todoist"],
+      );
+      expect(targets).toContain("github");
+      expect(targets).toContain("github_search_code");
+      expect(targets).toContain("mcp_call");
+      expect(targets[0]).toBe("github");
+      expect(targets).not.toContain("github_github_search_code");
+    });
+
+    it("does not derive a server for a prefix-shaped name whose server is not configured", () => {
+      const targets = createMcpPermissionTargets(
+        { tool: "github_search_code" },
+        ["todoist"],
+      );
+      expect(targets).not.toContain("github");
+      expect(targets).toContain("github_search_code");
+    });
+
+    it("omits redundant re-prefixed candidates when an explicit server accompanies an already-prefixed tool name", () => {
+      const targets = createMcpPermissionTargets(
+        { tool: "github_search_code", server: "github" },
+        [],
+      );
+      expect(targets).toContain("github");
+      expect(targets).toContain("github_search_code");
+      expect(targets).not.toContain("github_github_search_code");
+      expect(targets).not.toContain("github:github_search_code");
+    });
+
+    it("keeps qualified candidates when an explicit server accompanies an unprefixed tool name", () => {
+      const targets = createMcpPermissionTargets(
+        { tool: "search_code", server: "github" },
+        [],
+      );
+      expect(targets).toContain("github_search_code");
+      expect(targets).toContain("github:search_code");
+      expect(targets).toContain("github");
+    });
+
     it("derives server targets from configured server names when tool name ends with _<server>", () => {
       const targets = createMcpPermissionTargets({ tool: "exa_search" }, [
         "exa",
