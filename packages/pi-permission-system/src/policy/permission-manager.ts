@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { ResolvedAccessIntent } from "#src/access-intent/access-intent";
 import { normalizeInput } from "#src/access-intent/input-normalizer";
+import type { McpProxyLookup } from "#src/access-intent/mcp-proxy-registry";
 import {
   PATH_SURFACES,
   surfaceFamilyOf,
@@ -113,12 +114,20 @@ export interface PermissionManagerOptions extends PolicyLoaderOptions {
    * yolo disabled.
    */
   isYoloEnabled?: () => boolean;
+  /**
+   * Lookup for registered MCP proxy declarations. A tool name registered here
+   * evaluates on the `mcp` permission surface under its own name — the
+   * registration's descriptor supplies the invocation and (optionally) the
+   * live server list. Optional; production wires the per-node registry.
+   */
+  mcpProxyLookup?: McpProxyLookup;
 }
 
 export class PermissionManager implements ScopedPermissionManager {
   private readonly agentDir: string | undefined;
   private readonly flavor: PathFlavor;
   private readonly isYoloEnabled: () => boolean;
+  private readonly mcpProxyLookup: McpProxyLookup | undefined;
   private loader: PolicyLoader;
   private readonly resolvedPermissionsCache = new Map<
     string,
@@ -129,6 +138,7 @@ export class PermissionManager implements ScopedPermissionManager {
     this.agentDir = options.agentDir;
     this.flavor = options.flavor ?? posixPathFlavor;
     this.isYoloEnabled = options.isYoloEnabled ?? YOLO_DISABLED;
+    this.mcpProxyLookup = options.mcpProxyLookup;
     this.loader =
       options.policyLoader ??
       new FilePolicyLoader(
@@ -340,6 +350,7 @@ export class PermissionManager implements ScopedPermissionManager {
       toolName,
       intent.input,
       this.loader.getConfiguredMcpServerNames(),
+      this.mcpProxyLookup,
     );
     return buildCheckResult(
       surface,
@@ -388,7 +399,7 @@ function buildCheckResult(
       rule.layer === "config" || rule.layer === "session"
         ? rule.pattern
         : undefined,
-    source: deriveSource(rule, normalizedToolName),
+    source: deriveSource(rule, normalizedToolName, surface),
     origin: rule.origin,
     ...extras,
   };
@@ -429,12 +440,18 @@ function derivePolicyLoaderOptions(
 function deriveSource(
   rule: Rule,
   toolName: string,
+  surface?: string,
 ): PermissionCheckResult["source"] {
   if (rule.layer === "session") return "session";
   // Family membership, so a directional surface keeps reporting "special".
   if (SPECIAL_PERMISSION_KEYS.has(surfaceFamilyOf(toolName))) return "special";
 
-  switch (classifyToolKind(toolName)) {
+  // Classify the NORMALIZED surface when the caller supplies it: a registered
+  // MCP proxy reports source "mcp" under its own tool name (the surface is
+  // "mcp" while the tool name is not). For every built-in kind the surface
+  // equals the tool name, so this is behavior-preserving there.
+  const kindSource = surface ?? toolName;
+  switch (classifyToolKind(kindSource)) {
     case "mcp":
       return rule.layer === "default" ? "default" : "mcp";
     case "skill":

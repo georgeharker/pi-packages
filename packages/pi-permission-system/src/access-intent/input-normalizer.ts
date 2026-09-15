@@ -2,7 +2,11 @@ import { stripBashCommentLines } from "#src/access-intent/bash/bash-arity";
 import type { PathNormalizer } from "#src/path/path-normalizer";
 import { getNonEmptyString, toRecord } from "#src/value-guards";
 import type { AccessIntent, ResolvedAccessIntent } from "./access-intent";
-import { createMcpPermissionTargets } from "./mcp-targets";
+import type { McpInvocation, McpProxyLookup } from "./mcp-proxy-registry";
+import {
+  createMcpPermissionTargets,
+  createMcpTargetsFromInvocation,
+} from "./mcp-targets";
 import { PATH_SURFACES, surfaceFamilyOf } from "./path-surfaces";
 import { classifyToolKind } from "./tool-kind";
 
@@ -139,8 +143,13 @@ export function normalizeInput(
   toolName: string,
   input: unknown,
   configuredMcpServerNames: readonly string[],
+  mcpProxyLookup?: McpProxyLookup,
 ): NormalizedInput {
-  switch (classifyToolKind(toolName)) {
+  // A registered MCP proxy routes to the mcp surface under any tool name —
+  // the registration declares how to read the invocation and (optionally) the
+  // live server list, replacing the built-in field-read for that tool.
+  const proxy = mcpProxyLookup?.resolve(toolName);
+  switch (proxy ? ("mcp" as const) : classifyToolKind(toolName)) {
     // --- Skill ---
     case "skill": {
       const record = toRecord(input);
@@ -171,10 +180,35 @@ export function normalizeInput(
 
     // --- MCP ---
     case "mcp": {
-      const mcpTargets = [
-        ...createMcpPermissionTargets(input, configuredMcpServerNames),
-        "mcp",
-      ];
+      let mcpTargets: string[];
+      if (proxy) {
+        const record = toRecord(input);
+        let invocation: McpInvocation | undefined;
+        try {
+          invocation = proxy.describeInvocation(record);
+        } catch {
+          // A throwing descriptor declines; the call evaluates on the generic
+          // extension surface rather than failing the gate.
+          invocation = undefined;
+        }
+        if (!invocation) {
+          return {
+            surface: toolName,
+            values: ["*"],
+            resultExtras: {},
+          };
+        }
+        const servers = proxy.getServers?.() ?? configuredMcpServerNames;
+        mcpTargets = [
+          ...createMcpTargetsFromInvocation(invocation, servers),
+          "mcp",
+        ];
+      } else {
+        mcpTargets = [
+          ...createMcpPermissionTargets(input, configuredMcpServerNames),
+          "mcp",
+        ];
+      }
       const fallbackTarget = mcpTargets[0] ?? "mcp";
       return {
         surface: "mcp",

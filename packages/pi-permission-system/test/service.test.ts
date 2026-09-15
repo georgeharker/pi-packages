@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccessIntent } from "#src/access-intent/access-intent";
+import { McpProxyRegistry } from "#src/access-intent/mcp-proxy-registry";
 import { AuthorizerRegistry } from "#src/authority/authorizer-registry";
 import { posixPathFlavor } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path/path-normalizer";
@@ -229,6 +230,7 @@ describe("service round-trip through the keyed locator", () => {
         new ToolInputFormatterRegistry(),
         new ToolAccessExtractorRegistry(),
         new AuthorizerRegistry(),
+        new McpProxyRegistry(),
       ),
     );
   }

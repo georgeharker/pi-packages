@@ -18,6 +18,7 @@
  * ensures resilience across `/reload` and load-order edge cases.
  */
 
+import type { McpProxyRegistration } from "#src/access-intent/mcp-proxy-registry";
 import type { Authorizer } from "#src/authority/authorizer";
 import type { ToolAccessExtractor } from "#src/tool-input/tool-access-extractor-registry";
 import type { ToolInputFormatter } from "#src/tool-input/tool-input-formatter-registry";
@@ -215,6 +216,32 @@ export interface PermissionsService extends PermissionQuery {
    * {@link getToolAccessExtractor}.
    */
   getToolInputFormatter(toolName: string): ToolInputFormatter | undefined;
+
+  /**
+   * Register an MCP proxy declaration for a tool name.
+   *
+   * Lets an extension declare that one of its tools proxies MCP calls: how to
+   * read the server/tool identity out of the tool's input, and (optionally)
+   * the live upstream server list. A registered tool evaluates on the `mcp`
+   * permission surface under its own name — per-server rules, tool patterns,
+   * baseline auto-allows, and `payload.target` evidence for authorizers all
+   * apply — instead of the generic extension surface.
+   *
+   * Fact-shaping like {@link registerToolAccessExtractor}: the descriptor
+   * returns invocation facts and decides nothing. One registration per tool
+   * name — a second call for the same name throws. The returned disposer
+   * unregisters the declaration. Register from a `permissions:ready` handler
+   * so registration is robust to load order and survives `/reload`.
+   *
+   * The literal `mcp` tool (pi-mcp-adapter's shape) is pre-registered as a
+   * built-in default; registering another name adds alongside it.
+   */
+  registerMcpProxy(registration: McpProxyRegistration): () => void;
+
+  /** The MCP proxy declaration registered on this node for `toolName`, or
+   *  `undefined` when it has none. Fact-shaping and cross-node readable for
+   *  the same reason as {@link getToolAccessExtractor}. */
+  getMcpProxy(toolName: string): McpProxyRegistration | undefined;
 
   /**
    * Register a named live-authority chain link (ADR 0007 §4).

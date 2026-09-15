@@ -1,4 +1,8 @@
-import { getNonEmptyString, toRecord } from "#src/value-guards";
+import { toRecord } from "#src/value-guards";
+import {
+  describeBuiltinMcpInvocation,
+  type McpInvocation,
+} from "./mcp-proxy-registry";
 
 /**
  * An ordered accumulator that owns the uniqueness invariant.
@@ -135,61 +139,81 @@ function pushMcpToolPermissionTargets(
  * Candidates are ordered from most-specific to least-specific so that
  * `evaluateFirst()` stops at the first non-default match.
  */
+/**
+ * Build the ordered MCP permission-target candidates from a declared
+ * invocation — the shared tail of the built-in field-read path and any
+ * registered proxy descriptor. Ordering, baseline targets, and server
+ * precedence match {@link createMcpPermissionTargets} exactly.
+ */
+export function createMcpTargetsFromInvocation(
+  invocation: McpInvocation,
+  configuredServerNames: readonly string[] = [],
+): string[] {
+  const targets = new McpTargetList();
+
+  switch (invocation.verb) {
+    case "call": {
+      // The shared push derives the bare server for prefix-named tools against
+      // the server list and skips redundant re-prefixes for already-qualified
+      // names, so registered descriptors get identical candidate semantics to
+      // the built-in field-read path.
+      pushMcpToolPermissionTargets(
+        invocation.tool,
+        invocation.server ?? null,
+        configuredServerNames,
+        targets,
+      );
+      targets.add("mcp_call");
+      return targets.toArray();
+    }
+    case "connect": {
+      const server = invocation.server;
+      if (server) {
+        targets.add(`mcp_connect_${server}`);
+        targets.add(server);
+      }
+      targets.add("mcp_connect");
+      return targets.toArray();
+    }
+    case "describe": {
+      pushMcpToolPermissionTargets(
+        invocation.value,
+        invocation.server ?? null,
+        configuredServerNames,
+        targets,
+      );
+      targets.add("mcp_describe");
+      return targets.toArray();
+    }
+    case "search": {
+      if (invocation.server) {
+        targets.add(`mcp_server_${invocation.server}`);
+        targets.add(invocation.server);
+      }
+      targets.add(invocation.value);
+      targets.add("mcp_search");
+      return targets.toArray();
+    }
+    case "list": {
+      if (invocation.server) {
+        targets.add(`mcp_server_${invocation.server}`);
+        targets.add(invocation.server);
+      }
+      targets.add("mcp_list");
+      return targets.toArray();
+    }
+    case "status": {
+      targets.add("mcp_status");
+      return targets.toArray();
+    }
+  }
+}
+
 export function createMcpPermissionTargets(
   input: unknown,
   configuredServerNames: readonly string[] = [],
 ): string[] {
   const record = toRecord(input);
-  const tool = getNonEmptyString(record.tool);
-  const server = getNonEmptyString(record.server);
-  const connect = getNonEmptyString(record.connect);
-  const describe = getNonEmptyString(record.describe);
-  const search = getNonEmptyString(record.search);
-
-  const targets = new McpTargetList();
-
-  if (tool) {
-    pushMcpToolPermissionTargets(tool, server, configuredServerNames, targets);
-    targets.add("mcp_call");
-    return targets.toArray();
-  }
-
-  if (connect) {
-    targets.add(`mcp_connect_${connect}`);
-    targets.add(connect);
-    targets.add("mcp_connect");
-    return targets.toArray();
-  }
-
-  if (describe) {
-    pushMcpToolPermissionTargets(
-      describe,
-      server,
-      configuredServerNames,
-      targets,
-    );
-    targets.add("mcp_describe");
-    return targets.toArray();
-  }
-
-  if (search) {
-    if (server) {
-      targets.add(`mcp_server_${server}`);
-      targets.add(server);
-    }
-
-    targets.add(search);
-    targets.add("mcp_search");
-    return targets.toArray();
-  }
-
-  if (server) {
-    targets.add(`mcp_server_${server}`);
-    targets.add(server);
-    targets.add("mcp_list");
-    return targets.toArray();
-  }
-
-  targets.add("mcp_status");
-  return targets.toArray();
+  const invocation = describeBuiltinMcpInvocation(record);
+  return createMcpTargetsFromInvocation(invocation, configuredServerNames);
 }

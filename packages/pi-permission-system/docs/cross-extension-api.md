@@ -97,6 +97,27 @@ interface PermissionsService {
   ): () => void;
 
   /**
+   * Register an MCP proxy declaration for a tool name: how to read the
+   * server/tool identity out of the tool's input, and (optionally) the live
+   * upstream server list. A registered tool evaluates on the `mcp` surface
+   * under its own name. Returns a disposer; throws if a declaration is
+   * already registered for that tool name.
+   */
+  registerMcpProxy(registration: {
+    toolName: string;
+    describeInvocation: (
+      input: Record<string, unknown>,
+    ) => McpInvocation | undefined;
+    getServers?: () => string[];
+  }): () => void;
+
+  /**
+   * The MCP proxy declaration registered on this node for `toolName`, or
+   * `undefined` when it has none.
+   */
+  getMcpProxy(toolName: string): McpProxyRegistration | undefined;
+
+  /**
    * The access extractor registered on this node for `toolName`, or
    * `undefined` when it has none.
    */
@@ -352,6 +373,71 @@ That call emits a once-guarded Node warning (code `PI_PERMISSION_SYSTEM_WARN0001
 It is deliberately not a `DeprecationWarning`: `--no-deprecation` does not silence it.
 
 ---
+
+## Registering an MCP Proxy Tool
+
+MCP clients that funnel many servers through one proxy tool (the pi-mcp-adapter `mcp()` gateway, aggregators like mcp-combiner, or your own) can declare their structure so the `mcp` surface applies under **any** tool name — per-server rules, tool patterns, baseline auto-allows, and the `target` evidence authorizers reason over.
+The literal `mcp` tool (pi-mcp-adapter's shape) is pre-registered as a built-in default; these examples register **additional** proxies.
+
+A declaration is fact-shaping: `describeInvocation` returns what a call touches (verb, tool, server) and decides nothing — the permission system remains the authority on how invocations become rule targets.
+Register from a `permissions:ready` handler, on every node, per the guidance above.
+
+### Shape 1 — adapter-compatible args under a different name
+
+Your proxy uses the same `{ tool, server, search, describe, connect }` fields but a different tool name:
+
+```typescript
+pi.events.on(PERMISSIONS_READY_CHANNEL, () => {
+  const service = getPermissionsService(currentSessionId());
+  dispose = service?.registerMcpProxy({
+    toolName: "myGateway",
+    // Reuse the built-in descriptor for the adapter arg shape:
+    describeInvocation: describeBuiltinMcpInvocation,
+  });
+});
+```
+
+`getServers` may be omitted — derivation falls back to the servers configured in your MCP config files.
+
+### Shape 2 — aggregator with prefixed tool names (mcp-combiner)
+
+Combined tool names are already `<server>_<tool>`, so the descriptor resolves the server from its own convention and supplies the live server list:
+
+```typescript
+pi.events.on(PERMISSIONS_READY_CHANNEL, () => {
+  const service = getPermissionsService(currentSessionId());
+  dispose = service?.registerMcpProxy({
+    toolName: "combiner", // whatever the user renamed it to
+    describeInvocation: (input) => {
+      const tool = typeof input.tool === "string" ? input.tool : undefined;
+      if (!tool) return undefined; // decline → generic extension surface
+      const server = tool.split("_", 1)[0];
+      return { verb: "call", tool, server };
+    },
+    getServers: () => liveUpstreamNames(), // e.g. from the aggregator's health
+  });
+});
+```
+
+An explicit `server` short-circutes derivation, so aggregator calls never rely on name archaeology.
+
+### Shape 3 — custom argument shape
+
+Any shape works — the descriptor is the only thing that needs to understand it:
+
+```typescript
+describeInvocation: (input) => {
+  const ref = typeof input.ref === "string" ? input.ref.split(":") : undefined;
+  if (!ref || ref.length !== 2) return undefined;
+  return { verb: "call", tool: ref[1], server: ref[0] };
+},
+```
+
+Declining (`undefined`) or throwing falls back to the generic extension surface for that call — never fails the gate.
+
+### What registrations change for rule authors
+
+Nothing about rule syntax: registered proxies produce the same candidate shapes documented in [configuration.md](./configuration.md#mcp-surface) (`myServer`, `myServer:search`, tool names, `mcp_call`, baseline ops), so server-level exact rules and prefix-glob tool rules work identically — just under the proxy's own tool name instead of only the literal `mcp`.
 
 ## Event Bus
 

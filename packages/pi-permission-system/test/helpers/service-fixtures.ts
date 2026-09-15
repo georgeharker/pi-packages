@@ -23,6 +23,8 @@ export function makeFakePermissionsService(
     getToolAccessExtractor: vi.fn(),
     getToolInputFormatter: vi.fn(),
     registerAuthorizer: vi.fn(),
+    registerMcpProxy: vi.fn(),
+    getMcpProxy: vi.fn(),
     ...overrides,
   };
 }

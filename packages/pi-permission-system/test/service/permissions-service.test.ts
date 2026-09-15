@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { AccessIntent } from "#src/access-intent/access-intent";
+import {
+  type McpProxyLookup,
+  type McpProxyRegistrar,
+  McpProxyRegistry,
+} from "#src/access-intent/mcp-proxy-registry";
 import type { AuthorizerRegistrar } from "#src/authority/authorizer-registry";
 import { posixPathFlavor } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path/path-normalizer";
@@ -16,7 +21,6 @@ import {
   ToolInputFormatterRegistry,
 } from "#src/tool-input/tool-input-formatter-registry";
 import type { PermissionCheckResult, PermissionState } from "#src/types";
-
 import { makeCheckResult } from "#test/helpers/handler-fixtures";
 
 // Mock node:fs so realpathSync (the canonical alias) is controllable.
@@ -99,6 +103,7 @@ function makeService(overrides?: {
   accessExtractorRegistry?: ToolAccessExtractorRegistrar &
     ToolAccessExtractorLookup;
   authorizerRegistry?: AuthorizerRegistrar;
+  mcpProxyRegistry?: McpProxyRegistrar & McpProxyLookup;
 }) {
   const resolver = overrides?.resolver ?? makeResolver();
   // The published service always answers against the parent session's cwd.
@@ -115,6 +120,7 @@ function makeService(overrides?: {
     formatterRegistry,
     accessExtractorRegistry,
     authorizerRegistry,
+    overrides?.mcpProxyRegistry ?? new McpProxyRegistry(),
   );
   return {
     service,

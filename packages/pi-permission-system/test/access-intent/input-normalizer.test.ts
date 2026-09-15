@@ -395,3 +395,81 @@ describe("buildResolvedIntentFromMatchValues", () => {
     expect(intent.agentName).toBe("");
   });
 });
+
+describe("normalizeInput with a registered MCP proxy", () => {
+  const lookup = {
+    resolve: (toolName: string) =>
+      toolName === "combiner"
+        ? {
+            toolName: "combiner",
+            describeInvocation: (input: Record<string, unknown>) => {
+              if (typeof input.tool === "string" && input.tool) {
+                return {
+                  verb: "call" as const,
+                  tool: input.tool,
+                  server: input.tool.split("_", 1)[0],
+                };
+              }
+              return undefined;
+            },
+            getServers: () => ["github", "todoist"],
+          }
+        : undefined,
+  };
+
+  it("routes a registered tool name to the mcp surface under its own name", () => {
+    const result = normalizeInput(
+      "combiner",
+      { tool: "github_search_code" },
+      [],
+      lookup,
+    );
+    expect(result.surface).toBe("mcp");
+    expect(result.values).toContain("github");
+    expect(result.values).toContain("github_search_code");
+    expect(result.values).toContain("mcp_call");
+    expect(result.resultExtras).toEqual({ target: "github" });
+  });
+
+  it("uses getServers when the descriptor supplies no explicit server", () => {
+    const lookupNoServer = {
+      resolve: (toolName: string) =>
+        toolName === "combiner"
+          ? {
+              toolName: "combiner",
+              describeInvocation: (input: Record<string, unknown>) =>
+                typeof input.tool === "string" && input.tool
+                  ? { verb: "call" as const, tool: input.tool }
+                  : undefined,
+              getServers: () => ["github"],
+            }
+          : undefined,
+    };
+    const result = normalizeInput(
+      "combiner",
+      { tool: "github_search_code" },
+      [],
+      lookupNoServer,
+    );
+    expect(result.surface).toBe("mcp");
+    expect(result.values[0]).toBe("github");
+    expect(result.values).not.toContain("github_github_search_code");
+  });
+
+  it("a declining descriptor falls back to the generic extension surface", () => {
+    const result = normalizeInput("combiner", { unrelated: true }, [], lookup);
+    expect(result.surface).toBe("combiner");
+    expect(result.values).toEqual(["*"]);
+  });
+
+  it("an unregistered name keeps the extension surface", () => {
+    const result = normalizeInput(
+      "other-tool",
+      { tool: "github_search_code" },
+      [],
+      lookup,
+    );
+    expect(result.surface).toBe("other-tool");
+    expect(result.values).toEqual(["*"]);
+  });
+});

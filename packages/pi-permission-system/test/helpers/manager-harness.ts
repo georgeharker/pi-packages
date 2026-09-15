@@ -4,9 +4,11 @@
  * Writes a real config file and agents directory to a temp directory so
  * PermissionManager can load them without mocking the file system.
  */
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { McpProxyLookup } from "#src/access-intent/mcp-proxy-registry";
 
 import {
   getGlobalConfigPath,
@@ -90,6 +92,7 @@ export function sessionRule(
 
 export type CreateManagerOptions = {
   mcpServerNames?: readonly string[];
+  mcpProxyLookup?: McpProxyLookup;
 };
 
 export type CreateManagerWithProjectOptions = CreateManagerOptions & {
@@ -121,6 +124,7 @@ export function createManager(
     globalConfigPath,
     agentsDir,
     mcpServerNames: options.mcpServerNames,
+    mcpProxyLookup: options.mcpProxyLookup,
   });
 
   return {
@@ -139,11 +143,12 @@ export function createManager(
 export function createManagerWithConfig(
   permission: Record<string, unknown>,
   mcpServerNames: readonly string[] = [],
+  options: { mcpProxyLookup?: McpProxyLookup } = {},
 ): { manager: PermissionManager; cleanup: () => void } {
   const { manager, cleanup } = createManager(
     { permission } as ScopeConfig,
     {},
-    { mcpServerNames },
+    { mcpServerNames, mcpProxyLookup: options.mcpProxyLookup },
   );
   return { manager, cleanup };
 }
@@ -194,6 +199,7 @@ export function createManagerWithProject(
     projectGlobalConfigPath,
     projectAgentsDir,
     mcpServerNames: options.mcpServerNames,
+    mcpProxyLookup: options.mcpProxyLookup,
   });
 
   return {

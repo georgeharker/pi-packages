@@ -1,5 +1,10 @@
 import type { AccessIntent } from "#src/access-intent/access-intent";
 import { buildAccessIntentForSurface } from "#src/access-intent/input-normalizer";
+import type {
+  McpProxyLookup,
+  McpProxyRegistrar,
+  McpProxyRegistration,
+} from "#src/access-intent/mcp-proxy-registry";
 import type { Authorizer } from "#src/authority/authorizer";
 import type { AuthorizerRegistrar } from "#src/authority/authorizer-registry";
 import type { PathNormalizer } from "#src/path/path-normalizer";
@@ -52,6 +57,7 @@ export class LocalPermissionsService implements PermissionsService {
     private readonly accessExtractorRegistry: ToolAccessExtractorRegistrar &
       ToolAccessExtractorLookup,
     private readonly authorizerRegistry: AuthorizerRegistrar,
+    private readonly mcpProxyRegistry: McpProxyRegistrar & McpProxyLookup,
   ) {}
 
   checkPermission(
@@ -115,6 +121,16 @@ export class LocalPermissionsService implements PermissionsService {
     toolName: string,
   ): ReturnType<PermissionsService["getToolInputFormatter"]> {
     return this.formatterRegistry.get(toolName);
+  }
+
+  registerMcpProxy(
+    registration: McpProxyRegistration,
+  ): ReturnType<PermissionsService["registerMcpProxy"]> {
+    return this.mcpProxyRegistry.register(registration);
+  }
+
+  getMcpProxy(toolName: string): ReturnType<PermissionsService["getMcpProxy"]> {
+    return this.mcpProxyRegistry.resolve(toolName);
   }
 
   registerAuthorizer(

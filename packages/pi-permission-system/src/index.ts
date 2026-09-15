@@ -2,6 +2,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { warmBashParser } from "#src/access-intent/bash/parser";
 import { buildResolvedIntentFromMatchValues } from "#src/access-intent/input-normalizer";
+import {
+  BUILTIN_MCP_PROXY_TOOL_NAME,
+  describeBuiltinMcpInvocation,
+  McpProxyRegistry,
+} from "#src/access-intent/mcp-proxy-registry";
 import { AuthorizerChainAudit } from "#src/authority/authorizer-chain-audit";
 import {
   AuthorizerRegistry,
@@ -90,6 +95,14 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   const formatterRegistry = new ToolInputFormatterRegistry();
   registerBuiltinToolInputFormatters(formatterRegistry);
   const accessExtractorRegistry = new ToolAccessExtractorRegistry();
+  // MCP proxy declarations: alternative MCP clients register their proxy tool
+  // (any name) so the mcp surface applies to it; the literal `mcp` (pi-mcp-adapter's
+  // shape) is pre-registered so existing behavior is unchanged.
+  const mcpProxyRegistry = new McpProxyRegistry();
+  mcpProxyRegistry.register({
+    toolName: BUILTIN_MCP_PROXY_TOOL_NAME,
+    describeInvocation: describeBuiltinMcpInvocation,
+  });
   // One registry instance backs both the registerAuthorizer service surface and
   // AuthorizerSelection's chain resolution, so a registration is visible to
   // composition.
@@ -114,6 +127,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     agentDir,
     flavor: hostFlavor,
     isYoloEnabled,
+    mcpProxyLookup: mcpProxyRegistry,
   });
 
   const logger = new PermissionSessionLogger({
@@ -266,6 +280,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       authorizerSelection,
       logger,
     ),
+    mcpProxyRegistry,
   );
 
   // Subscribe to @gotgenes/pi-subagents' child lifecycle events so child

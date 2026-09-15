@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it, test } from "vitest";
 import type { ResolvedAccessIntent } from "#src/access-intent/access-intent";
 import { BashProgram } from "#src/access-intent/bash/program";
+import { McpProxyRegistry } from "#src/access-intent/mcp-proxy-registry";
 import { getPathPolicyValues } from "#src/access-intent/path-normalization";
 import {
   getGlobalConfigPath,
@@ -3568,6 +3569,107 @@ describe("check — path-values intent", () => {
       const result = manager.check(intent);
       expect(result.state).toBe("deny");
       expect(result.matchedPattern).toBe("src/*");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("PermissionManager — registered MCP proxy (mcpProxyLookup)", () => {
+  const proxyCall = (tool: string, server?: string) => ({
+    kind: "tool" as const,
+    surface: "combiner",
+    agentName: undefined,
+    input: server ? { tool, server } : { tool },
+  });
+
+  it("routes a registered proxy name onto the mcp surface — rules match its inner tool", () => {
+    const registry = new McpProxyRegistry();
+    registry.register({
+      toolName: "combiner",
+      describeInvocation: (input) => {
+        const tool = typeof input.tool === "string" ? input.tool : undefined;
+        if (!tool) return undefined;
+        return { verb: "call", tool, server: tool.split("_", 1)[0] };
+      },
+      getServers: () => ["github", "todoist"],
+    });
+    // Single-rule config: this test pins ROUTING (my change), not the
+    // catch-all-vs-derived-candidate composition order (the engine's existing,
+    // separately-tested semantics — see the issue's precedence note).
+    const { manager, cleanup } = createManagerWithConfig(
+      { mcp: { "github_*": "ask" } },
+      ["mcp-combiner"],
+      { mcpProxyLookup: registry },
+    );
+    try {
+      const r = manager.check(proxyCall("github_search_code"));
+      expect(r.state).toBe("ask");
+      expect(r.matchedPattern).toBe("github_*");
+      // target = the matched candidate (the engine replaces the fallback with what
+      // actually matched — the tool name here, which is the sharper evidence)
+      expect(r.target).toBe("github_search_code");
+      expect(r.source).toBe("mcp");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("without the lookup, the same call never reaches the mcp surface", () => {
+    const { manager, cleanup } = createManagerWithConfig(
+      { mcp: { "github_*": "ask" } },
+      ["mcp-combiner"],
+    );
+    try {
+      const r = manager.check(proxyCall("github_search_code"));
+      expect(r.matchedPattern).toBeUndefined(); // the mcp rule never saw it
+      expect(r.source).not.toBe("mcp");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a registered proxy without getServers falls back to configured MCP server names", () => {
+    const registry = new McpProxyRegistry();
+    registry.register({
+      toolName: "combiner",
+      describeInvocation: (input) =>
+        typeof input.tool === "string"
+          ? { verb: "call" as const, tool: input.tool }
+          : undefined,
+    });
+    const { manager, cleanup } = createManagerWithConfig(
+      { mcp: { todoist: "deny" } },
+      ["todoist", "gws_georgeharker"],
+      { mcpProxyLookup: registry },
+    );
+    try {
+      const r = manager.check(proxyCall("todoist_add_task"));
+      expect(r.state).toBe("deny");
+      const r2 = manager.check(proxyCall("gws_georgeharker_search_files"));
+      expect(r2.target).toBe("gws_georgeharker");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a throwing descriptor declines to the generic extension surface", () => {
+    const registry = new McpProxyRegistry();
+    registry.register({
+      toolName: "combiner",
+      describeInvocation: () => {
+        throw new Error("bad input shape");
+      },
+    });
+    const { manager, cleanup } = createManagerWithConfig(
+      { mcp: { "*": "deny" } },
+      ["mcp-combiner"],
+      { mcpProxyLookup: registry },
+    );
+    try {
+      const r = manager.check(proxyCall("github_search_code"));
+      expect(r.matchedPattern).toBeUndefined(); // the mcp deny never saw it
+      expect(r.source).not.toBe("mcp");
     } finally {
       cleanup();
     }
