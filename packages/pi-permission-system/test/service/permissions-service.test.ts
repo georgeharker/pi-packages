@@ -97,23 +97,36 @@ function makeAuthorizerRegistry(): AuthorizerRegistrar {
   };
 }
 
-function makeService(overrides?: {
+type MakeServiceOverrides = {
   resolver?: FakeResolver;
   formatterRegistry?: ToolInputFormatterRegistrar & ToolInputFormatterLookup;
   accessExtractorRegistry?: ToolAccessExtractorRegistrar &
     ToolAccessExtractorLookup;
   authorizerRegistry?: AuthorizerRegistrar;
   mcpProxyRegistry?: McpProxyRegistrar & McpProxyLookup;
-}) {
-  const resolver = overrides?.resolver ?? makeResolver();
+};
+
+/** Registry fallbacks, resolved once so makeService stays a thin assembler. */
+function makeRegistries(overrides: MakeServiceOverrides) {
+  return {
+    resolver: overrides.resolver ?? makeResolver(),
+    formatterRegistry: overrides.formatterRegistry ?? makeFormatterRegistry(),
+    accessExtractorRegistry:
+      overrides.accessExtractorRegistry ?? makeAccessExtractorRegistry(),
+    authorizerRegistry:
+      overrides.authorizerRegistry ?? makeAuthorizerRegistry(),
+  };
+}
+
+function makeService(overrides?: MakeServiceOverrides) {
+  const {
+    resolver,
+    formatterRegistry,
+    accessExtractorRegistry,
+    authorizerRegistry,
+  } = makeRegistries(overrides ?? {});
   // The published service always answers against the parent session's cwd.
   const session = { getPathNormalizer: () => normalizer };
-  const formatterRegistry =
-    overrides?.formatterRegistry ?? makeFormatterRegistry();
-  const accessExtractorRegistry =
-    overrides?.accessExtractorRegistry ?? makeAccessExtractorRegistry();
-  const authorizerRegistry =
-    overrides?.authorizerRegistry ?? makeAuthorizerRegistry();
   const service = new LocalPermissionsService(
     resolver,
     session,

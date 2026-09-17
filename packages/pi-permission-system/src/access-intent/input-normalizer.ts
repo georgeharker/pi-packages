@@ -2,7 +2,11 @@ import { stripBashCommentLines } from "#src/access-intent/bash/bash-arity";
 import type { PathNormalizer } from "#src/path/path-normalizer";
 import { getNonEmptyString, toRecord } from "#src/value-guards";
 import type { AccessIntent, ResolvedAccessIntent } from "./access-intent";
-import type { McpInvocation, McpProxyLookup } from "./mcp-proxy-registry";
+import type {
+  McpInvocation,
+  McpProxyLookup,
+  McpProxyRegistration,
+} from "./mcp-proxy-registry";
 import {
   createMcpPermissionTargets,
   createMcpTargetsFromInvocation,
@@ -139,6 +143,94 @@ export interface NormalizedInput {
  * @param configuredMcpServerNames - Ordered list of MCP server names from the
  *   global MCP config, used to derive server-qualified MCP targets.
  */
+function normalizeSkill(input: unknown): NormalizedInput {
+  const skillName = toRecord(input).name;
+  const lookupValue = typeof skillName === "string" ? skillName : "*";
+  return {
+    surface: "skill",
+    values: [lookupValue],
+    resultExtras: {},
+  };
+}
+
+function normalizeBash(input: unknown): NormalizedInput {
+  const record = toRecord(input);
+  const command = typeof record.command === "string" ? record.command : "";
+  // Strip leading shell comment lines so pattern matching operates on the
+  // actual command, not a `# description` prefix agents often prepend.
+  // Fall back to the raw command when stripping leaves nothing, so an
+  // all-comment command still evaluates against its literal text.
+  const matchValue = stripBashCommentLines(command) || command;
+  return {
+    surface: "bash",
+    values: [matchValue],
+    resultExtras: { command },
+  };
+}
+
+/** Registered-proxy path: the registration describes the invocation and
+ *  (optionally) supplies the live server list. */
+function normalizeMcpViaProxy(
+  toolName: string,
+  input: unknown,
+  configuredMcpServerNames: readonly string[],
+  proxy: McpProxyRegistration,
+): NormalizedInput {
+  const record = toRecord(input);
+  let invocation: McpInvocation | undefined;
+  try {
+    invocation = proxy.describeInvocation(record);
+  } catch {
+    // A throwing descriptor declines; the call evaluates on the generic
+    // extension surface rather than failing the gate.
+    invocation = undefined;
+  }
+  if (!invocation) {
+    return {
+      surface: toolName,
+      values: ["*"],
+      resultExtras: {},
+    };
+  }
+  const servers = proxy.getServers?.() ?? configuredMcpServerNames;
+  const mcpTargets = [
+    ...createMcpTargetsFromInvocation(invocation, servers),
+    "mcp",
+  ];
+  const fallbackTarget = mcpTargets[0] ?? "mcp";
+  return {
+    surface: "mcp",
+    values: mcpTargets,
+    resultExtras: { target: fallbackTarget },
+  };
+}
+
+function normalizeMcp(
+  toolName: string,
+  input: unknown,
+  configuredMcpServerNames: readonly string[],
+  proxy?: McpProxyRegistration,
+): NormalizedInput {
+  if (proxy) {
+    return normalizeMcpViaProxy(
+      toolName,
+      input,
+      configuredMcpServerNames,
+      proxy,
+    );
+  }
+  const mcpTargets = [
+    ...createMcpPermissionTargets(input, configuredMcpServerNames),
+    "mcp",
+  ];
+  const fallbackTarget = mcpTargets[0] ?? "mcp";
+  return {
+    surface: "mcp",
+    values: mcpTargets,
+    resultExtras: { target: fallbackTarget },
+  };
+}
+
 export function normalizeInput(
   toolName: string,
   input: unknown,
@@ -150,74 +242,12 @@ export function normalizeInput(
   // live server list, replacing the built-in field-read for that tool.
   const proxy = mcpProxyLookup?.resolve(toolName);
   switch (proxy ? ("mcp" as const) : classifyToolKind(toolName)) {
-    // --- Skill ---
-    case "skill": {
-      const record = toRecord(input);
-      const skillName = record.name;
-      const lookupValue = typeof skillName === "string" ? skillName : "*";
-      return {
-        surface: "skill",
-        values: [lookupValue],
-        resultExtras: {},
-      };
-    }
-
-    // --- Bash ---
-    case "bash": {
-      const record = toRecord(input);
-      const command = typeof record.command === "string" ? record.command : "";
-      // Strip leading shell comment lines so pattern matching operates on the
-      // actual command, not a `# description` prefix agents often prepend.
-      // Fall back to the raw command when stripping leaves nothing, so an
-      // all-comment command still evaluates against its literal text.
-      const matchValue = stripBashCommentLines(command) || command;
-      return {
-        surface: "bash",
-        values: [matchValue],
-        resultExtras: { command },
-      };
-    }
-
-    // --- MCP ---
-    case "mcp": {
-      let mcpTargets: string[];
-      if (proxy) {
-        const record = toRecord(input);
-        let invocation: McpInvocation | undefined;
-        try {
-          invocation = proxy.describeInvocation(record);
-        } catch {
-          // A throwing descriptor declines; the call evaluates on the generic
-          // extension surface rather than failing the gate.
-          invocation = undefined;
-        }
-        if (!invocation) {
-          return {
-            surface: toolName,
-            values: ["*"],
-            resultExtras: {},
-          };
-        }
-        const servers = proxy.getServers?.() ?? configuredMcpServerNames;
-        mcpTargets = [
-          ...createMcpTargetsFromInvocation(invocation, servers),
-          "mcp",
-        ];
-      } else {
-        mcpTargets = [
-          ...createMcpPermissionTargets(input, configuredMcpServerNames),
-          "mcp",
-        ];
-      }
-      const fallbackTarget = mcpTargets[0] ?? "mcp";
-      return {
-        surface: "mcp",
-        values: mcpTargets,
-        resultExtras: { target: fallbackTarget },
-      };
-    }
-
-    // --- All other surfaces (path-bearing tools and extension tools) ---
+    case "skill":
+      return normalizeSkill(input);
+    case "bash":
+      return normalizeBash(input);
+    case "mcp":
+      return normalizeMcp(toolName, input, configuredMcpServerNames, proxy);
     // Path-bearing tools with a present path never reach here — the gate emits
     // an access-path intent (#502). Missing-path and extension-tool cases both
     // collapse to the surface catch-all.

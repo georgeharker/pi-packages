@@ -23,6 +23,7 @@ import type {
   FlatPermissionConfig,
   PermissionCheckResult,
   PermissionState,
+  ScopeConfig,
 } from "#src/types";
 import { isPermissionState } from "#src/types";
 import { normalizeFlatConfig } from "./normalize";
@@ -190,19 +191,48 @@ export class PermissionManager implements ScopedPermissionManager {
       return cached.value;
     }
 
-    const globalConfig = this.loader.loadGlobalConfig();
-    const projectConfig = this.loader.loadProjectConfig();
-    const agentConfig = this.loader.loadAgentConfig(agentName);
-    const projectAgentConfig = this.loader.loadProjectAgentConfig(agentName);
+    const scopes = {
+      global: this.loader.loadGlobalConfig(),
+      project: this.loader.loadProjectConfig(),
+      agent: this.loader.loadAgentConfig(agentName),
+      projectAgent: this.loader.loadProjectAgentConfig(agentName),
+    };
 
+    const { composedRules, failClosedScopes } = this.composeEffectiveRules(
+      scopes,
+      agentName,
+    );
+
+    const value: ResolvedPermissions = {
+      composedRules,
+      failClosedScopes,
+    };
+    this.resolvedPermissionsCache.set(cacheKey, { stamp, value });
+    return value;
+  }
+
+  /** Merge the four config scopes and compose the effective ruleset, applying
+   *  the fail-closed floor (#646): a non-global scope with invalid config
+   *  floors every `allow` (inherited included) to `ask` so a higher scope
+   *  meant to tighten policy cannot silently fail open. Global is excluded —
+   *  nothing more permissive is inherited when it fails. */
+  private composeEffectiveRules(
+    scopes: {
+      global: ScopeConfig;
+      project: ScopeConfig;
+      agent: ScopeConfig;
+      projectAgent: ScopeConfig;
+    },
+    agentName?: string,
+  ): { composedRules: Ruleset; failClosedScopes: RuleOrigin[] } {
     // Merge permission objects across scopes (lowest → highest precedence),
     // building a parallel origin map that tracks which scope contributed each
     // (surface, pattern) entry.
     const { mergedPermission, origins } = mergeScopesWithOrigins([
-      ["global", globalConfig],
-      ["project", projectConfig],
-      ["agent", agentConfig],
-      ["project-agent", projectAgentConfig],
+      ["global", scopes.global],
+      ["project", scopes.project],
+      ["agent", scopes.agent],
+      ["project-agent", scopes.projectAgent],
     ]);
 
     // Extract the universal fallback from permission["*"].
@@ -231,33 +261,28 @@ export class PermissionManager implements ScopedPermissionManager {
       }),
     );
 
-    const composedRules = composeRuleset(
+    const composedRuleset = composeRuleset(
       synthesizeDefaults(universalFallback, universalFallbackOrigin),
       synthesizeBaseline(configRules),
       configRules,
     );
 
-    // Fail closed when a non-global scope's config is invalid: floor every
-    // `allow` (including one inherited from a lower scope) to `ask` so a
-    // higher scope meant to tighten policy cannot silently fail open (#646).
-    // Global is excluded — nothing more permissive is inherited when it fails.
-    const failClosedScopes: RuleOrigin[] = [];
-    if (projectConfig.invalid === true) failClosedScopes.push("project");
-    if (agentConfig.invalid === true) failClosedScopes.push("agent");
-    if (projectAgentConfig.invalid === true)
-      failClosedScopes.push("project-agent");
+    const failClosedScopes: RuleOrigin[] = (
+      [
+        ["project", scopes.project],
+        ["agent", scopes.agent],
+        ["project-agent", scopes.projectAgent],
+      ] as const
+    )
+      .filter(([, cfg]) => cfg.invalid === true)
+      .map(([origin]) => origin);
 
-    const effectiveRules =
+    const composedRules =
       failClosedScopes.length > 0
-        ? floorAllowsToAsk(composedRules)
-        : composedRules;
+        ? floorAllowsToAsk(composedRuleset)
+        : composedRuleset;
 
-    const value: ResolvedPermissions = {
-      composedRules: effectiveRules,
-      failClosedScopes,
-    };
-    this.resolvedPermissionsCache.set(cacheKey, { stamp, value });
-    return value;
+    return { composedRules, failClosedScopes };
   }
 
   /**
@@ -445,12 +470,20 @@ function deriveSource(
   if (rule.layer === "session") return "session";
   // Family membership, so a directional surface keeps reporting "special".
   if (SPECIAL_PERMISSION_KEYS.has(surfaceFamilyOf(toolName))) return "special";
-
   // Classify the NORMALIZED surface when the caller supplies it: a registered
   // MCP proxy reports source "mcp" under its own tool name (the surface is
   // "mcp" while the tool name is not). For every built-in kind the surface
   // equals the tool name, so this is behavior-preserving there.
-  const kindSource = surface ?? toolName;
+  return surfaceSource(rule, surface ?? toolName);
+}
+
+/** Map a classified tool kind to its check source. A "default"-layer match
+ *  collapses to the generic "default" source for kinds that distinguish a
+ *  specific rule from a synthesized default (mcp, extension). */
+function surfaceSource(
+  rule: Rule,
+  kindSource: string,
+): PermissionCheckResult["source"] {
   switch (classifyToolKind(kindSource)) {
     case "mcp":
       return rule.layer === "default" ? "default" : "mcp";
@@ -462,7 +495,6 @@ function deriveSource(
       // Built-in path-bearing tools (read/write/edit/grep/find/ls).
       return "tool";
     case "extension":
-      // Extension tools distinguish a synthesized-default match from a rule.
       return rule.layer === "default" ? "default" : "tool";
   }
 }

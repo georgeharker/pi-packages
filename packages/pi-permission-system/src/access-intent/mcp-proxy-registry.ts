@@ -89,22 +89,61 @@ export class McpProxyRegistry implements McpProxyLookup, McpProxyRegistrar {
  */
 export const BUILTIN_MCP_PROXY_TOOL_NAME = "mcp";
 
+/** Read one string field, trimmed; empty/missing becomes undefined. */
+function stringField(
+  input: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const raw = input[key];
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
+
+/** Verb branches in priority order: first matching field wins. Each builder
+ *  receives the (optional) server hint so call/search/describe can carry it. */
+const INVOCATION_BRANCHES: ReadonlyArray<{
+  field: string;
+  build: (value: string, server?: string) => McpInvocation;
+}> = [
+  {
+    field: "tool",
+    build: (tool, server) => ({
+      verb: "call",
+      tool,
+      ...(server ? { server } : {}),
+    }),
+  },
+  {
+    field: "search",
+    build: (search, server) => ({
+      verb: "search",
+      value: search,
+      ...(server ? { server } : {}),
+    }),
+  },
+  {
+    field: "describe",
+    build: (describe, server) => ({
+      verb: "describe",
+      value: describe,
+      ...(server ? { server } : {}),
+    }),
+  },
+  {
+    field: "connect",
+    build: (connect) => ({ verb: "connect", server: connect }),
+  },
+];
+
 export function describeBuiltinMcpInvocation(
   input: Record<string, unknown>,
 ): McpInvocation {
-  const tool = typeof input.tool === "string" ? input.tool.trim() : "";
-  const server = typeof input.server === "string" ? input.server.trim() : "";
-  const search = typeof input.search === "string" ? input.search.trim() : "";
-  const describe =
-    typeof input.describe === "string" ? input.describe.trim() : "";
-  const connect = typeof input.connect === "string" ? input.connect.trim() : "";
-
-  if (tool) return { verb: "call", tool, ...(server ? { server } : {}) };
-  if (search)
-    return { verb: "search", value: search, ...(server ? { server } : {}) };
-  if (describe)
-    return { verb: "describe", value: describe, ...(server ? { server } : {}) };
-  if (connect) return { verb: "connect", server: connect };
+  const server = stringField(input, "server");
+  for (const branch of INVOCATION_BRANCHES) {
+    const value = stringField(input, branch.field);
+    if (value) return branch.build(value, server);
+  }
   if (server) return { verb: "list", server };
   return { verb: "status" };
 }
